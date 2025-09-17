@@ -1,5 +1,4 @@
 import { AdsConfigs, AdsProvider } from "@/extensions/ads";
-import Script from "next/script";
 import { ReactNode } from "react";
 
 /**
