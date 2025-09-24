@@ -77,12 +77,12 @@ export function SignIn({
           </div>
 
           <div className="grid gap-2">
-            <div className="flex items-center">
+            {/* <div className="flex items-center">
               <Label htmlFor="password">Password</Label>
               <Link href="#" className="ml-auto inline-block text-sm underline">
                 Forgot your password?
               </Link>
-            </div>
+            </div> */}
 
             <Input
               id="password"
@@ -94,7 +94,7 @@ export function SignIn({
             />
           </div>
 
-          <div className="flex items-center gap-2">
+          {/* <div className="flex items-center gap-2">
             <Checkbox
               id="remember"
               onClick={() => {
@@ -102,7 +102,7 @@ export function SignIn({
               }}
             />
             <Label htmlFor="remember">Remember me</Label>
-          </div>
+          </div> */}
 
           <Button
             type="submit"

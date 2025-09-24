@@ -23,7 +23,10 @@ export function SignUser({
   isScrolled?: boolean;
   signButtonSize?: "default" | "sm" | "lg" | "icon";
 }) {
-  if (!envConfigs.database_url || !envConfigs.auth_secret) {
+  if (
+    typeof window === "undefined" &&
+    (!envConfigs.database_url || !envConfigs.auth_secret)
+  ) {
     return null;
   }
 

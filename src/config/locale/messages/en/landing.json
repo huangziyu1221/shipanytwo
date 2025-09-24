@@ -64,15 +64,7 @@
         }
       ]
     },
-    "buttons": [
-      {
-        "title": "Get ShipAny",
-        "url": "https://shipany.ai",
-        "target": "_blank",
-        "variant": "outline",
-        "icon": "ArrowUpRight"
-      }
-    ],
+    "buttons": [],
     "user_nav": {
       "items": [
         {
