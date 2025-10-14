@@ -1,9 +1,21 @@
+import bundleAnalyzer from "@next/bundle-analyzer";
 import createNextIntlPlugin from "next-intl/plugin";
 import { createMDX } from "fumadocs-mdx/next";
+
+const withMDX = createMDX();
+
+const withBundleAnalyzer = bundleAnalyzer({
+  enabled: process.env.ANALYZE === "true",
+});
+
+const withNextIntl = createNextIntlPlugin({
+  requestConfig: "./src/core/i18n/request.ts",
+});
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
+  reactStrictMode: false,
   pageExtensions: ["ts", "tsx", "js", "jsx", "md", "mdx"],
   images: {
     remotePatterns: [
@@ -13,54 +25,20 @@ const nextConfig = {
       },
     ],
   },
-  redirects: async () => {
-    return [
-      {
-        source: "/:locale/privacy-policy",
-        destination: "/privacy-policy",
-        permanent: false,
-      },
-      {
-        source: "/:locale/terms-of-service",
-        destination: "/terms-of-service",
-        permanent: false,
-      },
-    ];
-  },
-  experimental: {
-    turbopackFileSystemCacheForDev: true,
-    // Optimize package imports
-    optimizePackageImports: [
-      "lucide-react",
-      "@radix-ui/react-icons",
-      "framer-motion",
-      "recharts",
-      "@tabler/icons-react",
-    ],
-  },
-  reactCompiler: true,
-  // Optimize output
-  compress: true,
-  // Parallel build
-  webpack: (config, { isServer }) => {
-    // Optimize webpack config
-    if (!isServer) {
-      config.optimization = {
-        ...config.optimization,
-        moduleIds: "deterministic",
-      };
-    }
-    return config;
+  async redirects() {
+    return [];
   },
 };
 
-const withMDX = createMDX({
-  // customise the config file path
-  configPath: "./source.config.ts",
-});
+// Make sure experimental mdx flag is enabled
+const configWithMDX = {
+  ...nextConfig,
+  experimental: {
+    mdxRs: true,
+  },
+};
 
-const withNextIntl = createNextIntlPlugin({
-  requestConfig: "./src/core/i18n/request.ts",
-});
+export default withBundleAnalyzer(withNextIntl(withMDX(configWithMDX)));
 
-export default withNextIntl(withMDX(nextConfig));
+import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
+initOpenNextCloudflareForDev();
