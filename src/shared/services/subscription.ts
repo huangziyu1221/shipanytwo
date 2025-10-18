@@ -1,6 +1,6 @@
 import { subscription } from "@/config/db/schema";
 import { db } from "@/core/db";
-import { and, count, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { appendUserToResult, User } from "./user";
 
 export type Subscription = typeof subscription.$inferSelect & {
@@ -14,7 +14,8 @@ export type UpdateSubscription = Partial<
 export enum SubscriptionStatus {
   PENDING = "pending",
   ACTIVE = "active",
-  CANCELLED = "cancelled",
+  CANCELED = "canceled",
+  PENDING_CANCEL = "pending_cancel",
 }
 
 /**
@@ -24,6 +25,34 @@ export async function createSubscription(newSubscription: NewSubscription) {
   const [result] = await db()
     .insert(subscription)
     .values(newSubscription)
+    .returning();
+  return result;
+}
+
+/**
+ * update subscription by subscription no
+ */
+export async function updateSubscriptionBySubscriptionNo(
+  subscriptionNo: string,
+  updateSubscription: UpdateSubscription
+) {
+  const [result] = await db()
+    .update(subscription)
+    .set(updateSubscription)
+    .where(eq(subscription.subscriptionNo, subscriptionNo))
+    .returning();
+
+  return result;
+}
+
+export async function updateSubscriptionById(
+  id: string,
+  updateSubscription: UpdateSubscription
+) {
+  const [result] = await db()
+    .update(subscription)
+    .set(updateSubscription)
+    .where(eq(subscription.id, id))
     .returning();
   return result;
 }
@@ -48,6 +77,26 @@ export async function findSubscriptionBySubscriptionNo(subscriptionNo: string) {
     .select()
     .from(subscription)
     .where(eq(subscription.subscriptionNo, subscriptionNo));
+
+  return result;
+}
+
+export async function findSubscriptionByProviderSubscriptionId({
+  provider,
+  subscriptionId,
+}: {
+  provider: string;
+  subscriptionId: string;
+}) {
+  const [result] = await db()
+    .select()
+    .from(subscription)
+    .where(
+      and(
+        eq(subscription.paymentProvider, provider),
+        eq(subscription.subscriptionId, subscriptionId)
+      )
+    );
 
   return result;
 }
@@ -101,7 +150,10 @@ export async function getCurrentSubscription(userId: string) {
     .where(
       and(
         eq(subscription.userId, userId),
-        eq(subscription.status, SubscriptionStatus.ACTIVE)
+        inArray(subscription.status, [
+          SubscriptionStatus.ACTIVE,
+          SubscriptionStatus.PENDING_CANCEL,
+        ])
       )
     )
     .orderBy(desc(subscription.createdAt))

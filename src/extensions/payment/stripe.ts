@@ -3,13 +3,19 @@ import {
   type PaymentProvider,
   type PaymentConfigs,
   type PaymentSession,
-  type PaymentWebhookResult,
-  type PaymentRequest,
+  type PaymentEvent,
+  type PaymentOrder,
   PaymentStatus,
   PaymentType,
   PaymentInterval,
+  PaymentEventType,
+  SubscriptionInfo,
+  CheckoutSession,
+  SubscriptionCycleType,
+  PaymentInvoice,
+  PaymentBilling,
+  SubscriptionStatus,
 } from ".";
-import { envConfigs } from "@/config";
 
 /**
  * Stripe payment provider configs
@@ -18,7 +24,7 @@ import { envConfigs } from "@/config";
 export interface StripeConfigs extends PaymentConfigs {
   secretKey: string;
   publishableKey: string;
-  webhookSecret?: string;
+  signingSecret?: string;
   apiVersion?: string;
 }
 
@@ -35,14 +41,18 @@ export class StripeProvider implements PaymentProvider {
   constructor(configs: StripeConfigs) {
     this.configs = configs;
     this.client = new Stripe(configs.secretKey, {
-      apiVersion: (configs.apiVersion as any) || "2024-06-20",
+      httpClient: Stripe.createFetchHttpClient(),
     });
   }
 
-  async createPayment(request: PaymentRequest): Promise<PaymentSession> {
+  async createPayment({
+    order,
+  }: {
+    order: PaymentOrder;
+  }): Promise<CheckoutSession> {
     try {
       // check payment price
-      if (!request.price) {
+      if (!order.price) {
         throw new Error("price is required");
       }
 
@@ -51,24 +61,24 @@ export class StripeProvider implements PaymentProvider {
       // build price data
       const priceData: Stripe.Checkout.SessionCreateParams.LineItem.PriceData =
         {
-          currency: request.price.currency,
-          unit_amount: request.price.amount, // unit: cents
+          currency: order.price.currency,
+          unit_amount: order.price.amount, // unit: cents
           product_data: {
-            name: request.description || "",
+            name: order.description || "",
           },
         };
 
-      if (request.type === PaymentType.SUBSCRIPTION) {
+      if (order.type === PaymentType.SUBSCRIPTION) {
         // create subscription payment
 
         // check payment plan
-        if (!request.plan) {
+        if (!order.plan) {
           throw new Error("plan is required");
         }
 
         // build recurring data
         priceData.recurring = {
-          interval: request.plan
+          interval: order.plan
             .interval as Stripe.Checkout.SessionCreateParams.LineItem.PriceData.Recurring.Interval,
         };
       } else {
@@ -77,9 +87,9 @@ export class StripeProvider implements PaymentProvider {
 
       // set or create customer
       let customerId = "";
-      if (request.customer?.email) {
+      if (order.customer?.email) {
         const customers = await this.client.customers.list({
-          email: request.customer.email,
+          email: order.customer.email,
           limit: 1,
         });
 
@@ -87,9 +97,9 @@ export class StripeProvider implements PaymentProvider {
           customerId = customers.data[0].id;
         } else {
           const customer = await this.client.customers.create({
-            email: request.customer.email,
-            name: request.customer.name,
-            metadata: request.customer.metadata,
+            email: order.customer.email,
+            name: order.customer.name,
+            metadata: order.customer.metadata,
           });
           customerId = customer.id;
         }
@@ -98,9 +108,7 @@ export class StripeProvider implements PaymentProvider {
       // create payment session params
       const sessionParams: Stripe.Checkout.SessionCreateParams = {
         mode:
-          request.type === PaymentType.SUBSCRIPTION
-            ? "subscription"
-            : "payment",
+          order.type === PaymentType.SUBSCRIPTION ? "subscription" : "payment",
         line_items: [
           {
             price_data: priceData,
@@ -109,20 +117,26 @@ export class StripeProvider implements PaymentProvider {
         ],
       };
 
+      if (order.type === PaymentType.ONE_TIME) {
+        sessionParams.invoice_creation = {
+          enabled: true,
+        };
+      }
+
       if (customerId) {
         sessionParams.customer = customerId;
       }
 
-      if (request.metadata) {
-        sessionParams.metadata = request.metadata;
+      if (order.metadata) {
+        sessionParams.metadata = order.metadata;
       }
 
-      if (request.successUrl) {
-        sessionParams.success_url = request.successUrl;
+      if (order.successUrl) {
+        sessionParams.success_url = order.successUrl;
       }
 
-      if (request.cancelUrl) {
-        sessionParams.cancel_url = request.cancelUrl;
+      if (order.cancelUrl) {
+        sessionParams.cancel_url = order.cancelUrl;
       }
 
       const session = await this.client.checkout.sessions.create(sessionParams);
@@ -131,7 +145,6 @@ export class StripeProvider implements PaymentProvider {
       }
 
       return {
-        success: true,
         provider: this.name,
         checkoutParams: sessionParams,
         checkoutInfo: {
@@ -139,20 +152,20 @@ export class StripeProvider implements PaymentProvider {
           checkoutUrl: session.url,
         },
         checkoutResult: session,
+        metadata: order.metadata || {},
       };
     } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
-        provider: this.name,
-      };
+      throw error;
     }
   }
 
-  async getPayment({
+  /**
+   * Get payment session by session id
+   */
+  async getPaymentSession({
     sessionId,
   }: {
-    sessionId?: string;
+    sessionId: string;
   }): Promise<PaymentSession> {
     try {
       if (!sessionId) {
@@ -161,118 +174,131 @@ export class StripeProvider implements PaymentProvider {
 
       const session = await this.client.checkout.sessions.retrieve(sessionId);
 
-      if (!session.id || !session.amount_total || !session.currency) {
-        throw new Error("get payment failed");
-      }
-
-      let subscription: Stripe.Response<Stripe.Subscription> | undefined =
-        undefined;
-      let billingUrl = "";
-
-      if (session.subscription) {
-        subscription = await this.client.subscriptions.retrieve(
-          session.subscription as string
-        );
-
-        const billing = await this.client.billingPortal.sessions.create({
-          customer: subscription.customer as string,
-
-          return_url: `${envConfigs.app_url}/settings/billing`,
-        });
-
-        billingUrl = billing.url;
-      }
-
-      const result: PaymentSession = {
-        success: true,
-        provider: this.name,
-        paymentStatus: this.mapStripeStatus(session),
-        paymentInfo: {
-          discountCode: "",
-          discountAmount: undefined,
-          discountCurrency: undefined,
-          paymentAmount: session.amount_total || 0,
-          paymentCurrency: session.currency || "",
-          paymentEmail:
-            session.customer_email ||
-            session.customer_details?.email ||
-            undefined,
-          paidAt: session.created
-            ? new Date(session.created * 1000)
-            : undefined,
-        },
-        paymentResult: session,
-      };
-
-      if (subscription) {
-        result.subscriptionId = subscription.id;
-
-        // subscription data
-        const data = subscription.items.data[0];
-
-        result.subscriptionInfo = {
-          subscriptionId: subscription.id,
-          productId: data.price.product as string,
-          planId: data.price.id,
-          description: "",
-          amount: data.price.unit_amount || 0,
-          currency: data.price.currency,
-          currentPeriodStart: new Date(data.current_period_start * 1000),
-          currentPeriodEnd: new Date(data.current_period_end * 1000),
-          interval: data.plan.interval as PaymentInterval,
-          intervalCount: data.plan.interval_count || 1,
-          billingUrl: billingUrl,
-        };
-        result.subscriptionResult = subscription;
-      }
-
-      return result;
+      return await this.buildPaymentSessionFromCheckoutSession(session);
     } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "get payment failed",
-        provider: this.name,
-      };
+      throw error;
     }
   }
 
-  async handleWebhook({
-    rawBody,
-    signature,
-    headers,
-  }: {
-    rawBody: string | Buffer;
-    signature?: string;
-    headers?: Record<string, string>;
-  }): Promise<PaymentWebhookResult> {
+  /**
+   * Get payment event from webhook notification
+   */
+  async getPaymentEvent({ req }: { req: Request }): Promise<PaymentEvent> {
     try {
-      if (!this.configs.webhookSecret) {
-        throw new Error("Webhook secret not configured");
+      const rawBody = await req.text();
+      const signature = req.headers.get("stripe-signature") as string;
+
+      if (!rawBody || !signature) {
+        throw new Error("Invalid webhook request");
       }
 
-      if (!signature) {
-        throw new Error("Webhook signature not provided");
+      if (!this.configs.signingSecret) {
+        throw new Error("Signing Secret not configured");
       }
 
       const event = this.client.webhooks.constructEvent(
         rawBody,
         signature,
-        this.configs.webhookSecret
+        this.configs.signingSecret
       );
 
-      // Process the event based on type
-      console.log(`Stripe webhook event: ${event.type}`, event.data);
+      let paymentSession: PaymentSession | undefined = undefined;
+
+      const eventType = this.mapStripeEventType(event.type);
+
+      if (eventType === PaymentEventType.CHECKOUT_SUCCESS) {
+        paymentSession = await this.buildPaymentSessionFromCheckoutSession(
+          event.data.object as Stripe.Response<Stripe.Checkout.Session>
+        );
+      } else if (eventType === PaymentEventType.PAYMENT_SUCCESS) {
+        paymentSession = await this.buildPaymentSessionFromInvoice(
+          event.data.object as Stripe.Response<Stripe.Invoice>
+        );
+      } else if (eventType === PaymentEventType.SUBSCRIBE_UPDATED) {
+        paymentSession = await this.buildPaymentSessionFromSubscription(
+          event.data.object as Stripe.Response<Stripe.Subscription>
+        );
+      } else if (eventType === PaymentEventType.SUBSCRIBE_CANCELED) {
+        paymentSession = await this.buildPaymentSessionFromSubscription(
+          event.data.object as Stripe.Response<Stripe.Subscription>
+        );
+      }
+
+      if (!paymentSession) {
+        throw new Error("Invalid webhook event");
+      }
 
       return {
-        success: true,
-        acknowledged: true,
+        eventType: eventType,
+        eventResult: event,
+        paymentSession: paymentSession,
       };
     } catch (error) {
+      throw error;
+    }
+  }
+
+  async getPaymentInvoice({
+    invoiceId,
+  }: {
+    invoiceId: string;
+  }): Promise<PaymentInvoice> {
+    try {
+      const invoice = await this.client.invoices.retrieve(invoiceId);
+      if (!invoice.id) {
+        throw new Error("Invoice not found");
+      }
+
       return {
-        success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
-        acknowledged: false,
+        invoiceId: invoice.id,
+        invoiceUrl: invoice.hosted_invoice_url || undefined,
+        amount: invoice.amount_paid,
+        currency: invoice.currency,
       };
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async getPaymentBilling({
+    customerId,
+    returnUrl,
+  }: {
+    customerId: string;
+    returnUrl?: string;
+  }): Promise<PaymentBilling> {
+    try {
+      const billing = await this.client.billingPortal.sessions.create({
+        customer: customerId,
+        return_url: returnUrl,
+      });
+
+      if (!billing.url) {
+        throw new Error("get billing url failed");
+      }
+
+      return {
+        billingUrl: billing.url,
+      };
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  private mapStripeEventType(eventType: string): PaymentEventType {
+    switch (eventType) {
+      case "checkout.session.completed":
+        return PaymentEventType.CHECKOUT_SUCCESS;
+      case "invoice.payment_succeeded":
+        return PaymentEventType.PAYMENT_SUCCESS;
+      case "invoice.payment_failed":
+        return PaymentEventType.PAYMENT_FAILED;
+      case "customer.subscription.updated":
+        return PaymentEventType.SUBSCRIBE_UPDATED;
+      case "customer.subscription.deleted":
+        return PaymentEventType.SUBSCRIBE_CANCELED;
+      default:
+        throw new Error(`Unknown Stripe event type: ${eventType}`);
     }
   }
 
@@ -298,13 +324,190 @@ export class StripeProvider implements PaymentProvider {
             );
         }
       case "expired":
-        // payment cancelled
-        return PaymentStatus.CANCELLED;
+        // payment canceled
+        return PaymentStatus.CANCELED;
       case "open":
         return PaymentStatus.PROCESSING;
       default:
         throw new Error(`Unknown Stripe status: ${session.status}`);
     }
+  }
+
+  // build payment session from checkout session
+  private async buildPaymentSessionFromCheckoutSession(
+    session: Stripe.Response<Stripe.Checkout.Session>
+  ): Promise<PaymentSession> {
+    let subscription: Stripe.Response<Stripe.Subscription> | undefined =
+      undefined;
+    let billingUrl = "";
+
+    if (session.subscription) {
+      subscription = await this.client.subscriptions.retrieve(
+        session.subscription as string
+      );
+    }
+
+    const result: PaymentSession = {
+      provider: this.name,
+      paymentStatus: this.mapStripeStatus(session),
+      paymentInfo: {
+        transactionId: session.id,
+        discountCode: "",
+        discountAmount: undefined,
+        discountCurrency: undefined,
+        paymentAmount: session.amount_total || 0,
+        paymentCurrency: session.currency || "",
+        paymentEmail:
+          session.customer_email ||
+          session.customer_details?.email ||
+          undefined,
+        paymentUserName: session.customer_details?.name || "",
+        paymentUserId: session.customer
+          ? (session.customer as string)
+          : undefined,
+        paidAt: session.created ? new Date(session.created * 1000) : undefined,
+        invoiceId: session.invoice ? (session.invoice as string) : undefined,
+        invoiceUrl: "",
+      },
+      paymentResult: session,
+      metadata: session.metadata,
+    };
+
+    if (subscription) {
+      result.subscriptionId = subscription.id;
+      result.subscriptionInfo = await this.buildSubscriptionInfo(subscription);
+      result.subscriptionResult = subscription;
+    }
+
+    return result;
+  }
+
+  // build payment session from invoice
+  private async buildPaymentSessionFromInvoice(
+    invoice: Stripe.Response<Stripe.Invoice>
+  ): Promise<PaymentSession> {
+    let subscription: Stripe.Response<Stripe.Subscription> | undefined =
+      undefined;
+    let billingUrl = "";
+
+    if (invoice.lines.data.length > 0 && invoice.lines.data[0].subscription) {
+      subscription = await this.client.subscriptions.retrieve(
+        invoice.lines.data[0].subscription as string
+      );
+    }
+
+    const result: PaymentSession = {
+      provider: this.name,
+
+      paymentStatus: PaymentStatus.SUCCESS,
+      paymentInfo: {
+        transactionId: invoice.id,
+        discountCode: "",
+        discountAmount: undefined,
+        discountCurrency: undefined,
+        paymentAmount: invoice.amount_paid,
+        paymentCurrency: invoice.currency,
+        paymentEmail: invoice.customer_email || "",
+        paymentUserName: invoice.customer_name || "",
+        paymentUserId: invoice.customer
+          ? (invoice.customer as string)
+          : undefined,
+        paidAt: invoice.created ? new Date(invoice.created * 1000) : undefined,
+        invoiceId: invoice.id,
+        invoiceUrl: invoice.hosted_invoice_url || "",
+        subscriptionCycleType:
+          invoice.billing_reason === "subscription_create"
+            ? SubscriptionCycleType.CREATE
+            : invoice.billing_reason === "subscription_cycle"
+              ? SubscriptionCycleType.RENEWAL
+              : undefined,
+      },
+      paymentResult: invoice,
+      metadata: invoice.metadata,
+    };
+
+    if (subscription) {
+      result.subscriptionId = subscription.id;
+      result.subscriptionInfo = await this.buildSubscriptionInfo(subscription);
+      result.subscriptionResult = subscription;
+    }
+
+    return result;
+  }
+
+  // build payment session from invoice
+  private async buildPaymentSessionFromSubscription(
+    subscription: Stripe.Response<Stripe.Subscription>
+  ): Promise<PaymentSession> {
+    const result: PaymentSession = {
+      provider: this.name,
+    };
+
+    if (subscription) {
+      result.subscriptionId = subscription.id;
+      result.subscriptionInfo = await this.buildSubscriptionInfo(subscription);
+      result.subscriptionResult = subscription;
+    }
+
+    return result;
+  }
+
+  // build subscription info from subscription
+  private async buildSubscriptionInfo(
+    subscription: Stripe.Response<Stripe.Subscription>
+  ): Promise<SubscriptionInfo> {
+    // subscription data
+    const data = subscription.items.data[0];
+
+    const subscriptionInfo: SubscriptionInfo = {
+      subscriptionId: subscription.id,
+      productId: data.price.product as string,
+      planId: data.price.id,
+      description: "",
+      amount: data.price.unit_amount || 0,
+      currency: data.price.currency,
+      currentPeriodStart: new Date(data.current_period_start * 1000),
+      currentPeriodEnd: new Date(data.current_period_end * 1000),
+      interval: data.plan.interval as PaymentInterval,
+      intervalCount: data.plan.interval_count || 1,
+      metadata: subscription.metadata,
+    };
+
+    if (subscription.status === "active") {
+      if (subscription.cancel_at) {
+        subscriptionInfo.status = SubscriptionStatus.PENDING_CANCEL;
+        // cancel apply at
+        subscriptionInfo.canceledAt = new Date(
+          (subscription.canceled_at || 0) * 1000
+        );
+        // cancel end date
+        subscriptionInfo.canceledEndAt = new Date(
+          subscription.cancel_at * 1000
+        );
+        subscriptionInfo.canceledReason =
+          subscription.cancellation_details?.comment || "";
+        subscriptionInfo.canceledReasonType =
+          subscription.cancellation_details?.feedback || "";
+      } else {
+        subscriptionInfo.status = SubscriptionStatus.ACTIVE;
+      }
+    } else if (subscription.status === "canceled") {
+      // subscription canceled
+      subscriptionInfo.status = SubscriptionStatus.CANCELED;
+      subscriptionInfo.canceledAt = new Date(
+        (subscription.canceled_at || 0) * 1000
+      );
+      subscriptionInfo.canceledReason =
+        subscription.cancellation_details?.comment || "";
+      subscriptionInfo.canceledReasonType =
+        subscription.cancellation_details?.feedback || "";
+    } else {
+      throw new Error(
+        `Unknown Stripe subscription status: ${subscription.status}`
+      );
+    }
+
+    return subscriptionInfo;
   }
 }
 

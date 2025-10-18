@@ -149,14 +149,20 @@ export const order = pgTable("order", {
   deletedAt: timestamp("deleted_at"),
   description: text("description"), // order description
   productName: text("product_name"), // product name
-  subscriptionId: text("subscription_id"), // subscription id
-  subscriptionResult: text("subscription_result"), // subscription result
+  subscriptionId: text("subscription_id"), // provider subscription id
+  subscriptionResult: text("subscription_result"), // provider subscription result
   checkoutUrl: text("checkout_url"), // checkout url
   callbackUrl: text("callback_url"), // callback url, after handle callback
   creditsAmount: integer("credits_amount"), // credits amount
   creditsValidDays: integer("credits_valid_days"), // credits validity days
   planName: text("plan_name"), // subscription plan name
   paymentProductId: text("payment_product_id"), // payment product id
+  invoiceId: text("invoice_id"),
+  invoiceUrl: text("invoice_url"),
+  subscriptionNo: text("subscription_no"), // order subscription no
+  transactionId: text("transaction_id"), // payment transaction id
+  paymentUserName: text("payment_user_name"), // payment user name
+  paymentUserId: text("payment_user_id"), // payment user id
 });
 
 export const subscription = pgTable("subscription", {
@@ -186,6 +192,15 @@ export const subscription = pgTable("subscription", {
   deletedAt: timestamp("deleted_at"),
   planName: text("plan_name"),
   billingUrl: text("billing_url"),
+  productName: text("product_name"), // subscription product name
+  creditsAmount: integer("credits_amount"), // subscription credits amount
+  creditsValidDays: integer("credits_valid_days"), // subscription credits valid days
+  paymentProductId: text("payment_product_id"), // subscription payment product id
+  paymentUserId: text("payment_user_id"), // subscription payment user id
+  canceledAt: timestamp("canceled_at"), // subscription canceled apply at
+  canceledEndAt: timestamp("canceled_end_at"), // subscription canceled end at
+  canceledReason: text("canceled_reason"), // subscription canceled reason
+  canceledReasonType: text("canceled_reason_type"), // subscription canceled reason type
 });
 
 export const credit = pgTable("credit", {
@@ -195,7 +210,7 @@ export const credit = pgTable("credit", {
     .references(() => user.id, { onDelete: "cascade" }), // user id
   userEmail: text("user_email"), // user email
   orderNo: text("order_no"), // payment order no
-  subscriptionId: text("subscription_id"), // payment subscription id
+  subscriptionNo: text("subscription_no"), // subscription no
   transactionNo: text("transaction_no").unique().notNull(), // transaction no
   transactionType: text("transaction_type").notNull(), // transaction type, grant / consume
   transactionScene: text("transaction_scene"), // transaction scene, payment / subscription / gift / award

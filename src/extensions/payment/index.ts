@@ -61,13 +61,13 @@ export enum PaymentStatus {
   // final status
   SUCCESS = "paid", // paid means payment success
   FAILED = "failed", // failed means payment failed
-  CANCELLED = "cancelled", // cancelled means payment cancelled
+  CANCELED = "canceled", // canceled means payment canceled
 }
 
 /**
  * Payment subscription plan interface
  */
-export interface PaymentSubscriptionPlan {
+export interface PaymentPlan {
   id?: string;
   name: string;
   description?: string;
@@ -78,11 +78,11 @@ export interface PaymentSubscriptionPlan {
 }
 
 /**
- * Payment request interface
+ * Payment order interface for create payment
  */
-export interface PaymentRequest {
-  provider?: string; // optional
+export interface PaymentOrder {
   type?: PaymentType; // optional
+  orderNo?: string; // order no
   productId?: string; // create product first
   requestId?: string; // request id
   price?: PaymentPrice; // required if productId is not provided
@@ -93,7 +93,7 @@ export interface PaymentRequest {
   successUrl?: string;
   cancelUrl?: string;
   metadata?: Record<string, any>;
-  plan?: PaymentSubscriptionPlan; // required for subscription
+  plan?: PaymentPlan; // required for subscription
   customFields?: PaymentCustomField[]; // optional for custom fields
 }
 
@@ -101,21 +101,38 @@ export interface PaymentRequest {
  * Checkout info interface
  */
 export interface CheckoutInfo {
-  sessionId?: string;
-  checkoutUrl?: string;
+  sessionId: string;
+  checkoutUrl: string;
+}
+
+export enum SubscriptionCycleType {
+  CREATE = "create",
+  RENEWAL = "renew",
 }
 
 /**
  * Payment info interface
  */
 export interface PaymentInfo {
+  transactionId?: string;
   discountCode?: string;
   discountAmount?: number;
   discountCurrency?: string;
   paymentAmount: number;
   paymentCurrency: string;
   paymentEmail?: string;
+  paymentUserName?: string;
+  paymentUserId?: string;
   paidAt?: Date;
+  invoiceId?: string;
+  invoiceUrl?: string;
+  subscriptionCycleType?: SubscriptionCycleType;
+}
+
+export enum SubscriptionStatus {
+  ACTIVE = "active",
+  PENDING_CANCEL = "pending_cancel",
+  CANCELED = "canceled",
 }
 
 export interface SubscriptionInfo {
@@ -132,20 +149,31 @@ export interface SubscriptionInfo {
   currentPeriodEnd: Date;
   billingUrl?: string;
   metadata?: Record<string, any>;
+  status?: SubscriptionStatus;
+  canceledAt?: Date; // cancel apply at
+  canceledReason?: string; // cancel reason
+  canceledReasonType?: string; // cancel reason type
+  canceledEndAt?: Date; // cancel end at
+}
+
+/**
+ * Checkout session interface
+ */
+export interface CheckoutSession {
+  provider: string;
+
+  checkoutParams: any; // checkout request params
+  checkoutInfo: CheckoutInfo; // checkout info after checkout success
+  checkoutResult: any; // provider checkout result
+
+  metadata: any;
 }
 
 /**
  * Payment session interface
  */
 export interface PaymentSession {
-  success: boolean;
-  error?: string;
   provider: string;
-
-  // checkout session
-  checkoutParams?: any; // checkout request params
-  checkoutInfo?: CheckoutInfo; // checkout info after checkout success
-  checkoutResult?: any; // provider checkout result
 
   // payment info
   paymentStatus?: PaymentStatus; // payment status
@@ -156,26 +184,40 @@ export interface PaymentSession {
   subscriptionId?: string;
   subscriptionInfo?: SubscriptionInfo; // subscription info after subscription success
   subscriptionResult?: any; // provider subscription result
+
+  metadata?: any;
 }
 
-/**
- * Payment webhook notification interface
- */
-export interface PaymentWebhookEvent {
-  id: string;
-  type: string;
-  data: any;
-  provider: string;
-  created: Date;
+export enum PaymentEventType {
+  CHECKOUT_SUCCESS = "checkout.success", // checkout success
+  PAYMENT_SUCCESS = "payment.success", // payment success
+  PAYMENT_FAILED = "payment.failed", // payment failed
+  PAYMENT_REFUNDED = "payment.refunded", // payment refunded
+  SUBSCRIBE_UPDATED = "subscribe.updated", // subscription updated
+  SUBSCRIBE_CANCELED = "subscribe.canceled", // subscription canceled
 }
 
+export interface EventInfo {}
+
 /**
- * Payment webhook result interface
+ * Payment event interface
  */
-export interface PaymentWebhookResult {
-  success: boolean;
-  error?: string;
-  acknowledged: boolean;
+export interface PaymentEvent {
+  eventType: PaymentEventType;
+  eventResult: any; // provider event result
+
+  paymentSession?: PaymentSession;
+}
+
+export interface PaymentInvoice {
+  invoiceId: string;
+  invoiceUrl?: string;
+  amount?: number;
+  currency?: string;
+}
+
+export interface PaymentBilling {
+  billingUrl?: string;
 }
 
 /**
@@ -196,38 +238,33 @@ export interface PaymentProvider {
   configs: PaymentConfigs;
 
   // create payment
-  createPayment(request: PaymentRequest): Promise<PaymentSession>;
+  createPayment({ order }: { order: PaymentOrder }): Promise<CheckoutSession>;
 
   // get payment session
-  getPayment({
+  getPaymentSession({
     sessionId,
-    provider,
   }: {
     sessionId: string;
-    provider?: string;
   }): Promise<PaymentSession>;
 
-  // handle payment callback
-  handleCallback?({
-    searchParams,
-    provider,
-  }: {
-    searchParams: URLSearchParams;
-    provider?: string;
-  }): Promise<PaymentSession>;
+  // get payment event from webhook notification
+  getPaymentEvent({ req }: { req: Request }): Promise<PaymentEvent>;
 
-  // handle webhook notification
-  handleWebhook({
-    rawBody,
-    signature,
-    headers,
-    provider,
+  // get payment invoice
+  getPaymentInvoice?({
+    invoiceId,
   }: {
-    rawBody: string | Buffer;
-    signature?: string;
-    headers?: Record<string, string>;
-    provider?: string;
-  }): Promise<PaymentWebhookResult>;
+    invoiceId: string;
+  }): Promise<PaymentInvoice>;
+
+  // get payment billing
+  getPaymentBilling?({
+    customerId,
+    returnUrl,
+  }: {
+    customerId: string;
+    returnUrl?: string;
+  }): Promise<PaymentBilling>;
 }
 
 /**
@@ -249,6 +286,7 @@ export class PaymentManager {
   // get provider by name
   getProvider(name: string): PaymentProvider | undefined {
     const provider = this.providers.find((p) => p.name === name);
+
     if (!provider && this.defaultProvider) {
       return this.defaultProvider;
     }
@@ -271,13 +309,19 @@ export class PaymentManager {
   }
 
   // create payment using default provider
-  async createPayment(request: PaymentRequest): Promise<PaymentSession> {
-    if (request.provider) {
-      const provider = this.getProvider(request.provider);
-      if (!provider) {
-        throw new Error(`Payment provider '${request.provider}' not found`);
+  async createPayment({
+    order,
+    provider,
+  }: {
+    order: PaymentOrder;
+    provider?: string;
+  }): Promise<CheckoutSession> {
+    if (provider) {
+      const providerInstance = this.getProvider(provider);
+      if (!providerInstance) {
+        throw new Error(`Payment provider '${provider}' not found`);
       }
-      return provider.createPayment(request);
+      return providerInstance.createPayment({ order });
     }
 
     const defaultProvider = this.getDefaultProvider();
@@ -285,43 +329,55 @@ export class PaymentManager {
       throw new Error("No payment provider configured");
     }
 
-    return defaultProvider.createPayment(request);
+    return defaultProvider.createPayment({ order });
   }
 
   // get payment session using default provider
-  async getPayment(sessionId: string): Promise<PaymentSession | null> {
+  async getPaymentSession({
+    sessionId,
+    provider,
+  }: {
+    sessionId: string;
+    provider?: string;
+  }): Promise<PaymentSession | null> {
+    if (provider) {
+      const providerInstance = this.getProvider(provider);
+      if (!providerInstance) {
+        throw new Error(`Payment provider '${provider}' not found`);
+      }
+      return providerInstance.getPaymentSession({ sessionId });
+    }
+
     const defaultProvider = this.getDefaultProvider();
     if (!defaultProvider) {
       throw new Error("No payment provider configured");
     }
 
-    return defaultProvider.getPayment({ sessionId });
-  }
-
-  // create payment using specific provider
-  async createPaymentWithProvider(
-    request: PaymentRequest,
-    providerName: string
-  ): Promise<PaymentSession> {
-    const provider = this.getProvider(providerName);
-    if (!provider) {
-      throw new Error(`Payment provider '${providerName}' not found`);
-    }
-    return provider.createPayment(request);
+    return defaultProvider.getPaymentSession({ sessionId });
   }
 
   // handle webhook using specific provider
-  async handleWebhook(
-    providerName: string,
-    rawBody: string | Buffer,
-    signature?: string,
-    headers?: Record<string, string>
-  ): Promise<PaymentWebhookResult> {
-    const provider = this.getProvider(providerName);
-    if (!provider) {
-      throw new Error(`Payment provider '${providerName}' not found`);
+  async getPaymentEvent({
+    req,
+    provider,
+  }: {
+    req: Request;
+    provider?: string;
+  }): Promise<PaymentEvent> {
+    if (provider) {
+      const providerInstance = this.getProvider(provider);
+      if (!providerInstance) {
+        throw new Error(`Payment provider '${provider}' not found`);
+      }
+      return providerInstance.getPaymentEvent({ req });
     }
-    return provider.handleWebhook({ rawBody, signature, headers });
+
+    const defaultProvider = this.getDefaultProvider();
+    if (!defaultProvider) {
+      throw new Error("No payment provider configured");
+    }
+
+    return defaultProvider.getPaymentEvent({ req });
   }
 }
 
