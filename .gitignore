@@ -54,10 +54,10 @@ wrangler.toml
 .wrangler
 src/shared/types/cloudflare.d.ts
 
-.source
 src/config/db/migrations
 
 .debug 
 .test
 
 *.sql
+.source
