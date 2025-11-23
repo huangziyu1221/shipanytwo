@@ -44,7 +44,7 @@ export function db() {
     return drizzle(client);
   }
 
-  // Singleton mode: reuse existing connection (good for traditional servers)
+  // Singleton mode: reuse existing connection (good for traditional servers and serverless warm starts)
   if (envConfigs.db_singleton_enabled === 'true') {
     // Return existing instance if already initialized
     if (dbInstance) {
@@ -54,7 +54,7 @@ export function db() {
     // Create connection pool only once
     client = postgres(databaseUrl, {
       prepare: false,
-      max: 10, // Maximum connections in pool
+      max: Number(envConfigs.db_max_connections), // Maximum connections in pool (default 1)
       idle_timeout: 30, // Idle connection timeout (seconds)
       connect_timeout: 10, // Connection timeout (seconds)
     });
