@@ -107,7 +107,7 @@ export default async function DynamicPage({
 
   // return static page
   if (staticPage) {
-    const Page = await getThemePage('page-detail');
+    const Page = await getThemePage('static-page');
 
     return <Page locale={locale} post={staticPage} />;
   }

@@ -76,8 +76,18 @@ export default async function DynamicPage({
 
             default:
               try {
+                if (section.component) {
+                  return section.component;
+                }
+
                 const DynamicBlock = await getThemeBlock(block);
-                return <DynamicBlock key={sectionKey} section={section} />;
+                return (
+                  <DynamicBlock
+                    key={sectionKey}
+                    section={section}
+                    {...(data || section.data || {})}
+                  />
+                );
               } catch (error) {
                 console.log(`Dynamic block "${block}" not found`);
                 return null;

@@ -1,3 +1,5 @@
+import { ReactNode } from 'react';
+
 import {
   AgreementNav,
   Brand,
@@ -29,6 +31,7 @@ export interface Section {
   image_position?: 'left' | 'right' | 'top' | 'bottom' | 'center';
   text_align?: 'left' | 'center' | 'right';
   className?: string;
+  component?: ReactNode;
   [key: string]: any; // eslint-disable-line @typescript-eslint/no-explicit-any
 }
 

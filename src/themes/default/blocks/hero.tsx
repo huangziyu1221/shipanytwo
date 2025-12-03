@@ -48,7 +48,11 @@ export function Hero({
     <>
       <section
         id={section.id}
-        className={`pt-24 pb-8 md:pt-36 md:pb-8 ${section.className} ${className}`}
+        className={cn(
+          `pt-24 pb-8 md:pt-36 md:pb-8`,
+          section.className,
+          className
+        )}
       >
         {section.announcement && (
           <motion.div {...createFadeInVariant(0)}>
@@ -79,7 +83,7 @@ export function Hero({
         <div className="relative mx-auto max-w-5xl px-4 text-center">
           <motion.div {...createFadeInVariant(0.15)}>
             {texts && texts.length > 0 ? (
-              <h1 className="text-foreground text-5xl font-semibold text-balance sm:mt-12 sm:text-7xl">
+              <h1 className="text-foreground text-5xl font-semibold text-balance sm:mt-12 sm:text-6xl">
                 {texts[0]}
                 <Highlighter action="underline" color="#FF9800">
                   {highlightText}
@@ -87,7 +91,7 @@ export function Hero({
                 {texts[1]}
               </h1>
             ) : (
-              <h1 className="text-foreground text-5xl font-semibold text-balance sm:mt-12 sm:text-7xl">
+              <h1 className="text-foreground text-5xl font-semibold text-balance sm:mt-12 sm:text-6xl">
                 {section.title}
               </h1>
             )}
